@@ -1,33 +1,33 @@
 # Public OCR dispatch workflow
 
-组织内指定公开仓库的 OCR 调度入口。来源文件：`.github/workflows/codex-code-review.yml`，分支：`main`。
+The OCR dispatch entry point for selected public repositories in the organization. Workflow source: `.github/workflows/codex-code-review.yml` on the `main` branch.
 
-## 管理员接入步骤
+## Administrator setup
 
-1. 在组织 Settings → Rules → Rulesets 新建 Branch ruleset，例如 `OCR public repositories`。
-2. Target repositories 使用 Only selected repositories，先选择 `lexmount/lexbench-webfetch`。Target branches 选择 `main`。
-3. 勾选 Require workflows to pass before merging，选择来源 `lexmount/github-policy-public`、分支 `main`、文件 `.github/workflows/codex-code-review.yml`。
-4. 在组织 Settings → Secrets and variables → Actions 中编辑现有 `OCR_CI_TOKEN`：使用 Selected repositories，并保留已有授权、追加 `lexbench-webfetch`。不要将 Token 写入本仓库。仅 Private repositories 的 Secret 范围不能覆盖公开仓库。
-5. 将该公开仓库从原先引用私有 `github-policy` 工作流的 OCR Ruleset 中排除。不要修改其他保护规则。
-6. 配置完成后将新规则设为 Active，用新 PR 或新 commit 验证。
+1. In the organization settings, go to **Settings → Rules → Rulesets** and create a **Branch ruleset**, for example, `OCR public repositories`.
+2. Under **Target repositories**, choose **Only selected repositories** and initially select `lexmount/lexbench-webfetch`. Set **Target branches** to `main`.
+3. Enable **Require workflows to pass before merging**. Select source repository `lexmount/github-policy-public`, branch `main`, and file `.github/workflows/codex-code-review.yml`.
+4. Under **Settings → Secrets and variables → Actions**, edit the existing organization secret `OCR_CI_TOKEN`. Choose **Selected repositories**, retain all existing repository access, and add `lexbench-webfetch`. Do not commit the token to this repository. A secret scoped to **Private repositories** does not cover public repositories.
+5. Exclude this public repository from the previous OCR Ruleset that references the private `github-policy` workflow. Leave other protection rules unchanged.
+6. After completing the configuration, set the new ruleset to **Active** and verify it with a new PR or commit.
 
-本工作流确认后台持久化接单后退出，总提交/轮询时间不超过 90 秒（Runner 排队与启动不计入该计时；Job 硬超时为 3 分钟）。Agent 与默认 OCR 路由由 n8n 决定。最终 `ocr-review` 状态独立回写；当前按建议模式使用，不将它设为 Required。如需强制审查通过再合并，单独添加 required status check。
+The workflow exits once the backend confirms that the task has been durably accepted. Submission and polling take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n decides whether to route the task through the Agent or the default OCR path. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
 
-## 安全与限制
+## Security and limitations
 
-使用 `pull_request_target`，只读取 GitHub 事件中的 PR 坐标，不检出、不导入、不执行 PR 代码，适用于外部 fork PR。权限为 `permissions: {}`；调度令牌仅从目标仓库有权读取的组织 Secret 注入。运行日志不打印令牌。工作流内嵌 Python 标准库客户端，无第三方 Action 或运行时下载依赖。暂不支持 merge queue / merge_group。
+The workflow uses `pull_request_target` and reads only the PR identifiers from the GitHub event. It does not check out, import, or execute PR code, making it suitable for PRs from external forks. It sets `permissions: {}`. The dispatch token is injected only through an organization secret accessible to the target repository, and is not printed in execution logs. The workflow embeds a Python standard-library client and requires no third-party Actions or runtime dependency downloads. Merge queues and `merge_group` are not supported yet.
 
-公开的内容只有调度客户端、生成器和测试；不包含 OCR 服务代码或凭证。
+Only the dispatch client, generator, and tests are public. This repository does not contain OCR service code or credentials.
 
-## 维护与验证
+## Maintenance and verification
 
 ```sh
 python3 ocr/render_workflow.py
 python3 -m unittest discover -s ocr -p 'test_*.py'
 ```
 
-编辑 `ocr/ci_client.py` 后重新生成 YAML；测试会检查内嵌客户端一致性。
+Regenerate the YAML after editing `ocr/ci_client.py`. The tests verify that the embedded client stays in sync.
 
-## 快速回滚
+## Quick rollback
 
-管理员将新 OCR public repositories Ruleset 设为 Disabled，即可解除这条必需工作流约束。保留其他规则和 Secret 原有授权；不要重新让公开仓库引用私有 policy 工作流。该操作不会停止已接收的后台 OCR 任务。
+An administrator can set the new `OCR public repositories` Ruleset to **Disabled** to remove this required-workflow constraint. Keep other rules and existing secret access unchanged. Do not restore the public repository's reference to the private policy workflow. Disabling the ruleset does not stop OCR tasks already accepted by the backend.
