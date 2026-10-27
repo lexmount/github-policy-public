@@ -63,8 +63,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(client.verdict(reply('complete', durable=True, status_published=True,
                                              task_id='task-1', commit_status='failure')), 0)
 
+    def test_legacy_skip_and_v2_terminal_admission(self):
+        self.assertEqual(client.verdict(reply('skipped', durable=True, status_published=True,
+                                              task_id='task-1', commit_status='success')), 0)
+        for state in client.WAIT_STATES | client.FAIL_STATES | {'complete', 'skipped'}:
+            self.assertEqual(client.verdict(reply(state, durable=True, contract_version=2,
+                                                  acceptance='accepted', scheduler='backend', task_id='task-1')), 0)
+        with self.assertRaises(client.ReviewError):
+            client.verdict(reply('accepted', durable=True, contract_version=2, acceptance='accepted', scheduler='n8n', task_id='task-1'))
+
     def test_invalid_receipts_fail(self):
-        for state in ['failed', 'cancelled', 'superseded', 'skipped', 'unknown']:
+        for state in ['failed', 'cancelled', 'superseded', 'unknown']:
             with self.assertRaises(client.ReviewError): client.verdict(reply(state))
         for extra in [{'task_id': ''}, {'commit_status': 'success'}]:
             data = dict(durable=True, status_published=True, task_id='task-1', commit_status='pending')
