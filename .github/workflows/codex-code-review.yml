@@ -89,16 +89,24 @@ jobs:
 
           def verdict(reply):
               state = reply.get('state')
+              if reply.get('contract_version') == 2:
+                  if state not in WAIT_STATES | FAIL_STATES | {'complete', 'skipped'}:
+                      raise ReviewError('Unknown OCR task state.')
+                  if reply.get('acceptance') != 'accepted' or reply.get('scheduler') != 'backend' or reply.get('durable') is not True:
+                      raise ReviewError('Backend did not accept responsibility for this task.')
+                  if not isinstance(reply.get('task_id'), str) or not reply['task_id'].strip():
+                      raise ReviewError('Missing durable OCR task ID.')
+                  return 0
               if state in FAIL_STATES:
                   raise ReviewError('OCR task failed: ' + state)
-              if state not in WAIT_STATES | {'complete'}:
+              if state not in WAIT_STATES | {'complete', 'skipped'}:
                   raise ReviewError('Unknown OCR task state.')
               if reply.get('durable') is not True or reply.get('status_published') is not True:
                   return None
               task_id = reply.get('task_id')
               if not isinstance(task_id, str) or not task_id.strip():
                   raise ReviewError('Missing durable OCR task ID.')
-              expected = {'success', 'failure'} if state == 'complete' else {'pending'}
+              expected = {'success', 'failure'} if state in {'complete', 'skipped'} else {'pending'}
               if reply.get('commit_status') not in expected:
                   raise ReviewError('Missing authoritative OCR commit status.')
               # This gate confirms dispatch only. Rulesets may separately require ocr-review to enforce the verdict.
@@ -139,7 +147,7 @@ jobs:
           def summary(identity, reply):
               text = (f"## OCR dispatch accepted\n\nRepository: `{identity['repository']}`; PR #{identity['pull_number']}\n\n"
                       f"Head: `{identity['head_sha']}`\n\n"
-                      'Task persisted and commit status published. Review continues in the backend.\n'
+                      'Task persisted. The backend owns dispatch, recovery and result publication.\n'
                       'The separate ocr-review status reports the review verdict; enforcement is configured in Rulesets.\n')
               if os.environ.get('GITHUB_STEP_SUMMARY'):
                   with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
@@ -156,6 +164,9 @@ jobs:
               payload = {**receipt, 'source': {'run_id': os.environ.get('GITHUB_RUN_ID'),
                                              'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
                                              'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF')}}
+              run_id, run_attempt = os.environ.get('GITHUB_RUN_ID', ''), os.environ.get('GITHUB_RUN_ATTEMPT', '')
+              if run_id.isdecimal() and run_attempt.isdecimal() and int(run_attempt) > 1:
+                  payload['retry_key'] = run_id + ':' + run_attempt
               deadline = time.monotonic() + TIMEOUT
               reply = post('ocr-ci-submit', payload, token, deadline)
               last_state = None

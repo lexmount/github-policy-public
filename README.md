@@ -11,7 +11,7 @@ The OCR dispatch entry point for selected public repositories in the organizatio
 5. Exclude this public repository from the previous OCR Ruleset that references the private `github-policy` workflow. Leave other protection rules unchanged.
 6. After completing the configuration, set the new ruleset to **Active** and verify it with a new PR or commit.
 
-The workflow exits once the backend confirms that the task has been durably accepted. Submission and polling take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n decides whether to route the task through the Agent or the default OCR path. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
+The workflow exits once the backend confirms that the task has been durably accepted. Submission and polling take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n forwards the request. The backend owns Agent routing, default fallback, dispatch and recovery after durable acceptance. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
 
 ## Security and limitations
 
@@ -31,3 +31,7 @@ Regenerate the YAML after editing `ocr/ci_client.py`. The tests verify that the 
 ## Quick rollback
 
 An administrator can set the new `OCR public repositories` Ruleset to **Disabled** to remove this required-workflow constraint. Keep other rules and existing secret access unchanged. Do not restore the public repository's reference to the private policy workflow. Disabling the ruleset does not stop OCR tasks already accepted by the backend.
+
+## Backend contract v2
+
+Durable acceptance confirms backend scheduling responsibility, independently of whether the review is waiting, completed, skipped, blocked or failed. Legacy successful skipped responses are also supported. The workflow does not enforce the review verdict; configure the separate `ocr-review` required status when desired. Explicit Actions reruns provide a stable run/attempt retry key so failed pre-dispatch receipts can recover without duplicate submissions. The backend does not depend on n8n polling heartbeats.
