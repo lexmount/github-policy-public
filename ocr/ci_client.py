@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Trusted workflow client; never check out or execute pull request code."""
 import hashlib
+import http.client
 import json
 import os
+import random
 import re
 import signal
+import ssl
 import sys
 import time
 import urllib.error
@@ -15,6 +18,8 @@ SCHEMA = 'ocr-ci/v1'
 WAIT_STATES = {'accepted', 'dispatching', 'queued', 'running', 'retrying'}
 FAIL_STATES = {'failed', 'cancelled', 'superseded'}
 TIMEOUT = 90
+MAX_ATTEMPTS = 4
+MAX_RESPONSE_BYTES = 65536
 
 
 class ReviewError(Exception):
@@ -93,30 +98,68 @@ def timeout_handler(signum, frame):
     raise ReviewError('OCR acceptance exceeded 90 seconds; re-run to reuse the task.')
 
 
+def log_request(path, payload, attempt, started, status, error=None, retry_delay=None):
+    record = {'event': 'ocr_gateway_request', 'operation': path,
+              'request_id': payload.get('request_id'), 'attempt': attempt,
+              'elapsed_ms': round((time.monotonic() - started) * 1000),
+              'http_status': status, 'error': error, 'retry_delay_seconds': retry_delay}
+    print(json.dumps(record, sort_keys=True), flush=True)
+
+
 def post(path, payload, token, deadline):
     data = json.dumps(payload).encode()
-    for attempt in range(4):
-        remaining = deadline - time.monotonic()
+    for attempt in range(MAX_ATTEMPTS):
+        started = time.monotonic()
+        remaining = deadline - started
         if remaining <= 0:
             raise ReviewError('Timed out waiting for OCR. Re-run this workflow to reuse the task.')
+        status = None
         req = urllib.request.Request(BASE_URL + path, data=data, headers={
             'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
         try:
             with urllib.request.build_opener(NoRedirect).open(req, timeout=min(15, remaining)) as response:
-                raw = response.read(65537)
-                if len(raw) > 65536:
+                status = response.status
+                length = response.headers.get('Content-Length')
+                if length is not None:
+                    length = length.strip()
+                if length is not None and (not length.isascii() or not length.isdecimal()):
+                    raise ReviewError('OCR returned an invalid response length.')
+                expected = int(length) if length is not None else None
+                if expected is not None and expected > MAX_RESPONSE_BYTES:
                     raise ReviewError('OCR response exceeds the allowed size.')
-                try:
-                    return json.loads(raw)
-                except (ValueError, UnicodeError):
-                    raise ReviewError('OCR returned an invalid JSON response.') from None
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(raw) > MAX_RESPONSE_BYTES:
+                    raise ReviewError('OCR response exceeds the allowed size.')
+                # A bounded read may return a short body without raising IncompleteRead.
+                if expected is not None and len(raw) < expected:
+                    raise http.client.IncompleteRead(raw, expected - len(raw))
+                reply = json.loads(raw)
         except urllib.error.HTTPError as error:
-            if error.code not in [408, 429, 500, 502, 503, 504]:
-                raise ReviewError(f'OCR gateway HTTP {error.code}; check configuration and credentials.') from None
-        except (urllib.error.URLError, TimeoutError):
-            pass
-        if attempt < 3:
-            time.sleep(min(2 ** attempt, max(0, deadline - time.monotonic())))
+            status = error.code
+            error.close()
+            if status not in [408, 429, 500, 502, 503, 504]:
+                log_request(path, payload, attempt + 1, started, status, 'HTTPError')
+                raise ReviewError(f'OCR gateway HTTP {status}; check configuration and credentials.') from None
+            failure = 'HTTPError'
+        except (urllib.error.URLError, ConnectionError, TimeoutError,
+                ssl.SSLEOFError, http.client.IncompleteRead, http.client.BadStatusLine,
+                json.JSONDecodeError, UnicodeError) as error:
+            failure = type(error).__name__
+        except ReviewError:
+            log_request(path, payload, attempt + 1, started, status, 'ReviewError')
+            raise
+        else:
+            log_request(path, payload, attempt + 1, started, status)
+            return reply
+        remaining = max(0, deadline - time.monotonic())
+        delay = None
+        if attempt + 1 < MAX_ATTEMPTS and remaining > 0:
+            backoff = 2 ** attempt
+            delay = min(random.uniform(backoff / 2, backoff), remaining)
+        log_request(path, payload, attempt + 1, started, status, failure, delay)
+        if delay is None:
+            break
+        time.sleep(delay)
     raise ReviewError('OCR gateway remains unavailable after bounded retries; re-run this workflow.')
 
 
