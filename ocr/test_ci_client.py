@@ -29,6 +29,7 @@ class WorkflowTests(unittest.TestCase):
     def test_embedded_workflow_matches_tested_client(self):
         self.assertEqual((render_workflow.ROOT / '.github/workflows/codex-code-review.yml').read_text(),
                          render_workflow.rendered())
+        self.assertIn('\nname: OCR Dispatch\n', render_workflow.rendered())
 
     def test_base_branch_and_drafts_are_not_filtered(self):
         self.assertEqual(client.coordinates(EVENT, ENV), IDENTITY)
@@ -114,6 +115,23 @@ class WorkflowTests(unittest.TestCase):
             opener.return_value.open.side_effect = error
             with self.assertRaises(client.ReviewError): client.post('ocr-ci-submit', {}, 'test', client.time.monotonic() + 60)
             self.assertEqual(opener.return_value.open.call_count, 1)
+
+    def test_unenrolled_repository_skip_ends_dispatch_without_polling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / 'event.json'; event.write_text(json.dumps(EVENT))
+            summary_file = Path(directory) / 'summary.md'
+            env = {**ENV, 'GITHUB_EVENT_PATH': str(event), 'OCR_CI_TOKEN': 'test-value',
+                   'GITHUB_STEP_SUMMARY': str(summary_file)}
+            ack = reply('skipped', durable=True, contract_version=2, acceptance='accepted',
+                        scheduler='backend', task_id='task-1', reason='repository_not_enabled')
+            with patch.dict(os.environ, env, clear=True), patch.object(client, 'post', return_value=ack) as post:
+                with patch.object(client.time, 'sleep') as sleep:
+                    self.assertEqual(client.main(), 0)
+            self.assertEqual(post.call_count, 1)
+            self.assertEqual(post.call_args.args[0], 'ocr-ci-submit')
+            sleep.assert_not_called()
+            self.assertIn('OCR dispatch skipped', summary_file.read_text())
+            self.assertIn('disabled for this repository', summary_file.read_text())
 
     def test_gateway_503_has_bounded_retries(self):
         error = urllib.error.HTTPError('https://example.invalid', 503, 'Unavailable', {}, io.BytesIO())
