@@ -2,6 +2,8 @@
 
 The OCR dispatch entry point for selected public repositories in the organization. Workflow source: `.github/workflows/codex-code-review.yml` on the `main` branch.
 
+The workflow is displayed as `OCR Dispatch`. An authenticated request for an unenrolled repository exits successfully with `repository_not_enabled` and a dispatch-skipped summary. The backend records this policy decision without starting review.
+
 ## Administrator setup
 
 1. In the organization settings, go to **Settings → Rules → Rulesets** and create a **Branch ruleset**, for example, `OCR public repositories`.

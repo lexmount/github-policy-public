@@ -164,10 +164,16 @@ def post(path, payload, token, deadline):
 
 
 def summary(identity, reply):
-    text = (f"## OCR dispatch accepted\n\nRepository: `{identity['repository']}`; PR #{identity['pull_number']}\n\n"
+    skipped = reply.get('state') == 'skipped' and reply.get('reason') == 'repository_not_enabled'
+    heading = 'OCR dispatch skipped' if skipped else 'OCR dispatch accepted'
+    if skipped:
+        details = 'Automatic review is disabled for this repository. Dispatch skipped by repository policy.\n'
+    else:
+        details = ('Task persisted. The backend owns dispatch, recovery and result publication.\n'
+                   'The separate ocr-review status reports the review verdict; enforcement is configured in Rulesets.\n')
+    text = (f"## {heading}\n\nRepository: `{identity['repository']}`; PR #{identity['pull_number']}\n\n"
             f"Head: `{identity['head_sha']}`\n\n"
-            'Task persisted. The backend owns dispatch, recovery and result publication.\n'
-            'The separate ocr-review status reports the review verdict; enforcement is configured in Rulesets.\n')
+            + details)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
             output.write(text)
@@ -194,11 +200,14 @@ def main():
         result = verdict(reply)
         state = reply['state']
         if state != last_state:
-            print('OCR state: ' + state, flush=True)
+            print('OCR dispatch state: ' + state, flush=True)
             last_state = state
         if result is not None:
             summary(identity, reply)
-            print('OCR dispatch accepted; the separate ocr-review status reports the review verdict.')
+            if state == 'skipped' and reply.get('reason') == 'repository_not_enabled':
+                print('OCR dispatch skipped: repository_not_enabled.')
+            else:
+                print('OCR dispatch accepted; the separate ocr-review status reports the review verdict.')
             return result
         remaining = deadline - time.monotonic()
         if remaining <= 0:
