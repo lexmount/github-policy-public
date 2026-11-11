@@ -109,23 +109,27 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn('separate ocr-review', (Path(directory) / 'summary.md').read_text())
 
     def test_gateway_401_is_not_retried(self):
-        error = urllib.error.HTTPError('https://example.invalid', 401, 'No', {}, None)
+        error = urllib.error.HTTPError('https://example.invalid', 401, 'No', {}, io.BytesIO())
         with patch.object(client.urllib.request, 'build_opener') as opener:
             opener.return_value.open.side_effect = error
             with self.assertRaises(client.ReviewError): client.post('ocr-ci-submit', {}, 'test', client.time.monotonic() + 60)
             self.assertEqual(opener.return_value.open.call_count, 1)
 
     def test_gateway_503_has_bounded_retries(self):
-        error = urllib.error.HTTPError('https://example.invalid', 503, 'Unavailable', {}, None)
+        error = urllib.error.HTTPError('https://example.invalid', 503, 'Unavailable', {}, io.BytesIO())
         with patch.object(client.urllib.request, 'build_opener') as opener, patch.object(client.time, 'sleep'):
             opener.return_value.open.side_effect = error
             with self.assertRaises(client.ReviewError): client.post('ocr-ci-submit', {}, 'test', client.time.monotonic() + 60)
             self.assertEqual(opener.return_value.open.call_count, 4)
 
     def test_bad_json_is_not_success(self):
-        with patch.object(client.urllib.request, 'build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = b'<html>proxy error</html>'
+        with patch.object(client.urllib.request, 'build_opener') as opener, patch.object(client.time, 'sleep'):
+            response = opener.return_value.open.return_value.__enter__.return_value
+            response.status = 200
+            response.headers = {}
+            response.read.return_value = b'<html>proxy error</html>'
             with self.assertRaises(client.ReviewError): client.post('ocr-ci-status', {}, 'test', client.time.monotonic() + 60)
+            self.assertEqual(opener.return_value.open.call_count, client.MAX_ATTEMPTS)
 
 
 if __name__ == '__main__': unittest.main()

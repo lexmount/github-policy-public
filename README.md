@@ -11,7 +11,9 @@ The OCR dispatch entry point for selected public repositories in the organizatio
 5. Exclude this public repository from the previous OCR Ruleset that references the private `github-policy` workflow. Leave other protection rules unchanged.
 6. After completing the configuration, set the new ruleset to **Active** and verify it with a new PR or commit.
 
-The workflow exits once the backend confirms that the task has been durably accepted. Submission and polling take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n forwards the request. The backend owns Agent routing, default fallback, dispatch and recovery after durable acceptance. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
+The workflow exits once the backend confirms that the task has been durably accepted. Submission and network recovery take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n forwards the request. The backend owns Agent routing, default fallback, dispatch and recovery after durable acceptance. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
+
+Network failures, incomplete responses and transient HTTP errors retry the same submission up to four times, with exponential backoff and jitter. All attempts reuse the PR snapshot request ID and explicit workflow-rerun key. Each request logs its attempt number, elapsed milliseconds, HTTP status, error type and next retry delay. Credentials and response bodies are excluded from these logs. A v2 durable acceptance response ends the workflow immediately, including when status publication is still pending. Legacy acceptance responses can query the status endpoint within the same 90-second deadline.
 
 ## Security and limitations
 
