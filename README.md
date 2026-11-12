@@ -39,3 +39,7 @@ An administrator can set the new `OCR public repositories` Ruleset to **Disabled
 ## Backend contract v2
 
 Durable acceptance confirms backend scheduling responsibility, independently of whether the review is waiting, completed, skipped, blocked or failed. Legacy successful skipped responses are also supported. The workflow does not enforce the review verdict; configure the separate `ocr-review` required status when desired. Explicit Actions reruns provide a stable run/attempt retry key so failed pre-dispatch receipts can recover without duplicate submissions. The backend does not depend on n8n polling heartbeats.
+
+## Audit telemetry
+
+Structured results are collected asynchronously from Actions logs; the client makes no audit reporting request. See [the telemetry contract](ocr/telemetry.md).
