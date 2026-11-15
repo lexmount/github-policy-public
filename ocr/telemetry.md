@@ -20,3 +20,5 @@ Cancellation, runner termination or lost output can prevent a final line. Collec
 The independent ReviewHub collector reads completed job logs through the GitHub Actions API, validates the snapshot and run attempt, then writes PostgreSQL. Its App needs Actions read permission on target repositories; this is separate from this workflow's `permissions: {}`. Existing historical logs do not acquire structured results retroactively. Client and collector rollout need a real target-repository run to verify the path.
 
 Run `python3 ocr/render_workflow.py` and `python3 -m unittest discover -s ocr -p 'test_*.py'` after editing the client. The generated YAML must stay in sync.
+
+Current clients emit gateway requests only for `ocr-ci-submit`. Readers retain support for historical `ocr-ci-status` telemetry; removal of polling does not rewrite past audit records.
