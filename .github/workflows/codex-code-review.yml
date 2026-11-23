@@ -128,15 +128,30 @@ jobs:
                   raise ReviewError('OCR receipt does not match the submitted request.')
 
 
-          def validate_acceptance(reply):
-              if reply.get('contract_version') != 2:
-                  raise ReviewError('Backend must return the durable acceptance v2 contract.')
-              if reply.get('state') not in WAIT_STATES | FAIL_STATES | {'complete', 'skipped'}:
+          def verdict(reply):
+              state = reply.get('state')
+              if reply.get('contract_version') == 2:
+                  if state not in WAIT_STATES | FAIL_STATES | {'complete', 'skipped'}:
+                      raise ReviewError('Unknown OCR task state.')
+                  if reply.get('acceptance') != 'accepted' or reply.get('scheduler') != 'backend' or reply.get('durable') is not True:
+                      raise ReviewError('Backend did not accept responsibility for this task.')
+                  if not isinstance(reply.get('task_id'), str) or not reply['task_id'].strip():
+                      raise ReviewError('Missing durable OCR task ID.')
+                  return 0
+              if state in FAIL_STATES:
+                  raise ReviewError('OCR task failed: ' + state)
+              if state not in WAIT_STATES | {'complete', 'skipped'}:
                   raise ReviewError('Unknown OCR task state.')
-              if reply.get('acceptance') != 'accepted' or reply.get('scheduler') != 'backend' or reply.get('durable') is not True:
-                  raise ReviewError('Backend did not accept responsibility for this task.')
-              if not isinstance(reply.get('task_id'), str) or not reply['task_id'].strip():
+              if reply.get('durable') is not True or reply.get('status_published') is not True:
+                  return None
+              task_id = reply.get('task_id')
+              if not isinstance(task_id, str) or not task_id.strip():
                   raise ReviewError('Missing durable OCR task ID.')
+              expected = {'success', 'failure'} if state in {'complete', 'skipped'} else {'pending'}
+              if reply.get('commit_status') not in expected:
+                  raise ReviewError('Missing authoritative OCR commit status.')
+              # This gate confirms dispatch only. Rulesets may separately require ocr-review to enforce the verdict.
+              return 0
 
 
           def timeout_handler(signum, frame):
@@ -235,32 +250,49 @@ jobs:
               if not token:
                   raise ReviewError('Missing organization secret OCR_CI_TOKEN or repository access to it.', 'configuration_error')
               with open(os.environ['GITHUB_EVENT_PATH']) as source:
-                  identity = coordinates(json.load(source), os.environ)
+                  event = json.load(source)
+              identity = coordinates(event, os.environ)
               receipt = {'schema': SCHEMA, 'request_id': request_id(identity), **identity}
               if _telemetry:
                   _telemetry.context.update({**identity, 'request_id': receipt['request_id']})
                   _telemetry.emit('ocr_client_started')
-              payload = {**receipt, 'source': {'run_id': os.environ.get('GITHUB_RUN_ID'),
-                                             'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
-                                             'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF')}}
+              payload = {
+                  **receipt,
+                  'github_event': event,
+                  'source': {
+                      'run_id': os.environ.get('GITHUB_RUN_ID'),
+                      'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
+                      'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
+                  },
+              }
               run_id, run_attempt = os.environ.get('GITHUB_RUN_ID', ''), os.environ.get('GITHUB_RUN_ATTEMPT', '')
               if run_id.isdecimal() and run_attempt.isdecimal() and int(run_attempt) > 1:
                   payload['retry_key'] = run_id + ':' + run_attempt
               deadline = time.monotonic() + TIMEOUT
               reply = post('ocr-ci-submit', payload, token, deadline)
-              check_identity(reply, identity)
-              validate_acceptance(reply)
-              state = reply['state']
-              print('OCR dispatch state: ' + state, flush=True)
-              skipped = state == 'skipped' and reply.get('reason') == 'repository_not_enabled'
-              if _telemetry:
-                  _telemetry.finish('skipped' if skipped else 'accepted', 'repository_not_enabled' if skipped else None)
-              summary(identity, reply)
-              if skipped:
-                  print('OCR dispatch skipped: repository_not_enabled.')
-              else:
-                  print('OCR dispatch accepted; the separate ocr-review status reports the review verdict.')
-              return 0
+              last_state = None
+              while True:
+                  check_identity(reply, identity)
+                  result = verdict(reply)
+                  state = reply['state']
+                  if state != last_state:
+                      print('OCR dispatch state: ' + state, flush=True)
+                      last_state = state
+                  if result is not None:
+                      skipped = state == 'skipped' and reply.get('reason') == 'repository_not_enabled'
+                      if _telemetry:
+                          _telemetry.finish('skipped' if skipped else 'accepted', 'repository_not_enabled' if skipped else None)
+                      summary(identity, reply)
+                      if state == 'skipped' and reply.get('reason') == 'repository_not_enabled':
+                          print('OCR dispatch skipped: repository_not_enabled.')
+                      else:
+                          print('OCR dispatch accepted; the separate ocr-review status reports the review verdict.')
+                      return result
+                  remaining = deadline - time.monotonic()
+                  if remaining <= 0:
+                      raise ReviewError('OCR acceptance exceeded 90 seconds. Re-run to reuse the task.', 'ack_deadline_exceeded')
+                  time.sleep(min(5, remaining))
+                  reply = post('ocr-ci-status', receipt, token, deadline)
 
 
           def main():

@@ -15,11 +15,13 @@ The workflow is displayed as `OCR Dispatch`. An authenticated request for an une
 
 The workflow exits once the backend confirms that the task has been durably accepted. Submission and network recovery take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n forwards the request. The backend owns Agent routing, default fallback, dispatch and recovery after durable acceptance. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
 
-Network failures, incomplete responses and transient HTTP errors retry the same submission up to four times, with exponential backoff and jitter. All attempts reuse the PR snapshot request ID and explicit workflow-rerun key. Each request logs its attempt number, elapsed milliseconds, HTTP status, error type and next retry delay. Credentials and response bodies are excluded from these logs. A v2 durable acceptance response ends the workflow immediately, including when status publication is still pending. Legacy acceptance responses fail validation. The client never polls a status endpoint.
+Network failures, incomplete responses and transient HTTP errors retry the same submission up to four times, with exponential backoff and jitter. All attempts reuse the PR snapshot request ID and explicit workflow-rerun key. Each request logs its attempt number, elapsed milliseconds, HTTP status, error type and next retry delay. Credentials and response bodies are excluded from these logs. A v2 durable acceptance response ends the workflow immediately, including when status publication is still pending. For a legacy response awaiting durable acceptance, the client checks the status endpoint within the same 90-second deadline.
 
 ## Security and limitations
 
-The workflow uses `pull_request_target` and reads only the PR identifiers from the GitHub event. It does not check out, import, or execute PR code, making it suitable for PRs from external forks. It sets `permissions: {}`. The dispatch token is injected only through an organization secret accessible to the target repository, and is not printed in execution logs. The workflow embeds a Python standard-library client and requires no third-party Actions or runtime dependency downloads. Merge queues and `merge_group` are not supported yet.
+The workflow reads the original `pull_request_target` event from `GITHUB_EVENT_PATH` and sends it as the `github_event` JSON object in each dispatch submission. The snapshot identifiers still determine the request ID. The event body is excluded from Actions logs.
+
+The workflow does not check out, import, or execute PR code, making it suitable for PRs from external forks. It sets `permissions: {}`. The dispatch token is injected only through an organization secret accessible to the target repository, and is not printed in execution logs. The workflow embeds a Python standard-library client and requires no third-party Actions or runtime dependency downloads. Merge queues and `merge_group` are not supported yet.
 
 Only the dispatch client, generator, and tests are public. This repository does not contain OCR service code or credentials.
 
@@ -38,7 +40,7 @@ An administrator can set the new `OCR public repositories` Ruleset to **Disabled
 
 ## Backend contract v2
 
-Durable acceptance confirms backend scheduling responsibility, independently of whether the review is waiting, completed, skipped, blocked or failed. Legacy successful skipped responses are also supported. The workflow does not enforce the review verdict; configure the separate `ocr-review` required status when desired. Explicit Actions reruns provide a stable run/attempt retry key so failed pre-dispatch receipts can recover without duplicate submissions. The backend does not depend on n8n polling heartbeats.
+Durable acceptance confirms backend scheduling responsibility, independently of whether the review is waiting, completed, skipped, blocked or failed. Legacy receipts require a durable task ID and status publication. The workflow does not enforce the review verdict; configure the separate `ocr-review` required status when desired. Explicit Actions reruns provide a stable run/attempt retry key so failed pre-dispatch receipts can recover without duplicate submissions. The backend does not depend on n8n polling heartbeats.
 
 ## Audit telemetry
 

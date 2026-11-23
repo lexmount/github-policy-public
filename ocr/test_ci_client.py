@@ -54,33 +54,37 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(client.ReviewError): client.check_identity(reply(**patch_data), IDENTITY)
         client.check_identity(reply(), IDENTITY)
 
-    def test_v2_acceptance_does_not_wait_for_execution_or_publication(self):
-        for state in client.WAIT_STATES | client.FAIL_STATES | {'complete', 'skipped'}:
-            with self.subTest(state=state):
-                client.validate_acceptance(reply(state, durable=True, contract_version=2,
-                                                  acceptance='accepted', scheduler='backend',
-                                                  task_id='task-1', status_published=False))
+    def test_receipt_requires_persistence_and_published_status(self):
+        for state in client.WAIT_STATES:
+            self.assertIsNone(client.verdict(reply(state)))
+            self.assertEqual(client.verdict(reply(state, durable=True, status_published=True,
+                                                 task_id='task-1', commit_status='pending')), 0)
 
-    def test_legacy_and_invalid_acknowledgements_fail(self):
-        good = dict(durable=True, contract_version=2, acceptance='accepted',
-                    scheduler='backend', task_id='task-1')
-        for patch_data in [{'contract_version': None}, {'contract_version': 1},
-                           {'contract_version': 3}, {'durable': False}, {'durable': 1},
-                           {'scheduler': 'n8n'}, {'acceptance': None},
-                           {'task_id': ''}, {'task_id': ' '}, {'state': 'unknown'}]:
-            with self.subTest(patch_data=patch_data):
-                data = reply('queued', **good)
-                data.update(patch_data)
-                with self.assertRaises(client.ReviewError):
-                    client.validate_acceptance(data)
+    def test_failed_review_can_ack_but_never_pretends_review_success(self):
+        self.assertEqual(client.verdict(reply('complete', durable=True, status_published=True,
+                                             task_id='task-1', commit_status='failure')), 0)
+
+    def test_legacy_skip_and_v2_terminal_admission(self):
+        self.assertEqual(client.verdict(reply('skipped', durable=True, status_published=True,
+                                              task_id='task-1', commit_status='success')), 0)
+        for state in client.WAIT_STATES | client.FAIL_STATES | {'complete', 'skipped'}:
+            self.assertEqual(client.verdict(reply(state, durable=True, contract_version=2,
+                                                  acceptance='accepted', scheduler='backend', task_id='task-1')), 0)
         with self.assertRaises(client.ReviewError):
-            client.validate_acceptance(reply('queued', durable=True, status_published=True,
-                                             task_id='task-1', commit_status='pending'))
+            client.verdict(reply('accepted', durable=True, contract_version=2, acceptance='accepted', scheduler='n8n', task_id='task-1'))
+
+    def test_invalid_receipts_fail(self):
+        for state in ['failed', 'cancelled', 'superseded', 'unknown']:
+            with self.assertRaises(client.ReviewError): client.verdict(reply(state))
+        for extra in [{'task_id': ''}, {'commit_status': 'success'}]:
+            data = dict(durable=True, status_published=True, task_id='task-1', commit_status='pending')
+            data.update(extra)
+            with self.assertRaises(client.ReviewError): client.verdict(reply('queued', **data))
 
     def test_deadline_expires_before_another_request(self):
         with patch.object(client.urllib.request, 'build_opener') as opener:
             with self.assertRaises(client.ReviewError):
-                client.post('ocr-ci-submit', {}, 'test', client.time.monotonic() - 1)
+                client.post('ocr-ci-status', {}, 'test', client.time.monotonic() - 1)
             opener.assert_not_called()
         with self.assertRaises(client.ReviewError): client.timeout_handler(None, None)
         self.assertEqual(client.TIMEOUT, 90)
@@ -93,29 +97,19 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(client.ReviewError): client.main()
             post.assert_not_called()
 
-    def test_submission_never_polls_even_after_a_legacy_ack(self):
-        acknowledgements = [
-            (reply('accepted', durable=True, contract_version=2, acceptance='accepted',
-                   scheduler='backend', task_id='task-1', status_published=False), True),
-            (reply('queued', durable=True, status_published=True, task_id='task-1',
-                   commit_status='pending'), False),
-            (reply('accepted'), False),
-        ]
+    def test_complete_submit_and_poll_flow_without_route(self):
         with tempfile.TemporaryDirectory() as directory:
             event = Path(directory) / 'event.json'; event.write_text(json.dumps(EVENT))
             env = {**ENV, 'GITHUB_EVENT_PATH': str(event), 'OCR_CI_TOKEN': 'test-value',
                    'GITHUB_STEP_SUMMARY': str(Path(directory) / 'summary.md')}
-            for ack, accepted in acknowledgements:
-                with self.subTest(accepted=accepted, ack=ack), patch.dict(os.environ, env, clear=True), patch.object(client, 'post', return_value=ack) as post, patch.object(client.time, 'sleep') as sleep:
-                    if accepted:
-                        self.assertEqual(client.main(), 0)
-                    else:
-                        with self.assertRaises(client.ReviewError): client.main()
-                    self.assertEqual(post.call_count, 1)
-                    self.assertEqual(post.call_args.args[0], 'ocr-ci-submit')
-                    self.assertNotIn('route', post.call_args.args[1])
-                    sleep.assert_not_called()
-            self.assertIn('separate ocr-review', (Path(directory) / 'summary.md').read_text())
+            with patch.dict(os.environ, env, clear=True), patch.object(client, 'post', side_effect=[reply('accepted'), reply('queued', durable=True, status_published=True, task_id='task-1', commit_status='pending')]) as post, patch.object(client.time, 'sleep'):
+                self.assertEqual(client.main(), 0)
+                self.assertEqual([x.args[0] for x in post.call_args_list], ['ocr-ci-submit', 'ocr-ci-status'])
+                self.assertEqual(post.call_args_list[0].args[1]['github_event'], EVENT)
+                self.assertNotIn('github_event', post.call_args_list[1].args[1])
+                for call in post.call_args_list:
+                    self.assertNotIn('route', call.args[1])
+                self.assertIn('separate ocr-review', (Path(directory) / 'summary.md').read_text())
 
     def test_gateway_401_is_not_retried(self):
         error = urllib.error.HTTPError('https://example.invalid', 401, 'No', {}, io.BytesIO())
@@ -154,7 +148,7 @@ class WorkflowTests(unittest.TestCase):
             response.status = 200
             response.headers = {}
             response.read.return_value = b'<html>proxy error</html>'
-            with self.assertRaises(client.ReviewError): client.post('ocr-ci-submit', {}, 'test', client.time.monotonic() + 60)
+            with self.assertRaises(client.ReviewError): client.post('ocr-ci-status', {}, 'test', client.time.monotonic() + 60)
             self.assertEqual(opener.return_value.open.call_count, client.MAX_ATTEMPTS)
 
 
