@@ -15,7 +15,7 @@ The workflow is displayed as `OCR Dispatch`. An authenticated request for an une
 
 The workflow exits once the backend confirms that the task has been durably accepted. Submission and network recovery take no more than 90 seconds in total, excluding runner queue and startup time. The job has a hard timeout of 3 minutes. n8n forwards the request. The backend owns Agent routing, default fallback, dispatch and recovery after durable acceptance. The final `ocr-review` status is reported separately. It is currently advisory and is not configured as required. To require a successful review before merging, add a separate required status check.
 
-Network failures, incomplete responses and transient HTTP errors retry the same submission up to four times, with exponential backoff and jitter. All attempts reuse the PR snapshot request ID and explicit workflow-rerun key. Each request logs its attempt number, elapsed milliseconds, HTTP status, error type and next retry delay. Credentials and response bodies are excluded from these logs. A v2 durable acceptance response ends the workflow immediately, including when status publication is still pending. Legacy acceptance responses fail validation. The client never polls a status endpoint.
+Network failures, incomplete responses and transient HTTP errors retry the same submission up to four times, with exponential backoff and jitter. All attempts reuse the PR snapshot request ID and explicit workflow-rerun key. Each request logs its attempt number, elapsed milliseconds, HTTP status, error type and next retry delay. Credentials and response bodies are excluded from these logs. A v2 durable acceptance response ends the workflow immediately, including when status publication is still pending. For a legacy response awaiting durable acceptance, the client checks the status endpoint within the same 90-second deadline.
 
 ## Security and limitations
 
@@ -40,7 +40,7 @@ An administrator can set the new `OCR public repositories` Ruleset to **Disabled
 
 ## Backend contract v2
 
-Durable acceptance confirms backend scheduling responsibility, independently of whether the review is waiting, completed, skipped, blocked or failed. Legacy successful skipped responses are also supported. The workflow does not enforce the review verdict; configure the separate `ocr-review` required status when desired. Explicit Actions reruns provide a stable run/attempt retry key so failed pre-dispatch receipts can recover without duplicate submissions. The backend does not depend on n8n polling heartbeats.
+Durable acceptance confirms backend scheduling responsibility, independently of whether the review is waiting, completed, skipped, blocked or failed. Legacy receipts require a durable task ID and status publication. The workflow does not enforce the review verdict; configure the separate `ocr-review` required status when desired. Explicit Actions reruns provide a stable run/attempt retry key so failed pre-dispatch receipts can recover without duplicate submissions. The backend does not depend on n8n polling heartbeats.
 
 ## Audit telemetry
 
