@@ -19,7 +19,9 @@ Network failures, incomplete responses and transient HTTP errors retry the same 
 
 ## Security and limitations
 
-The workflow uses `pull_request_target` and reads only the PR identifiers from the GitHub event. It does not check out, import, or execute PR code, making it suitable for PRs from external forks. It sets `permissions: {}`. The dispatch token is injected only through an organization secret accessible to the target repository, and is not printed in execution logs. The workflow embeds a Python standard-library client and requires no third-party Actions or runtime dependency downloads. Merge queues and `merge_group` are not supported yet.
+The workflow reads the original `pull_request_target` event from `GITHUB_EVENT_PATH` and sends it as the `github_event` JSON object in each dispatch submission. The snapshot identifiers still determine the request ID. The event body is excluded from Actions logs.
+
+The workflow does not check out, import, or execute PR code, making it suitable for PRs from external forks. It sets `permissions: {}`. The dispatch token is injected only through an organization secret accessible to the target repository, and is not printed in execution logs. The workflow embeds a Python standard-library client and requires no third-party Actions or runtime dependency downloads. Merge queues and `merge_group` are not supported yet.
 
 Only the dispatch client, generator, and tests are public. This repository does not contain OCR service code or credentials.
 

@@ -235,14 +235,21 @@ jobs:
               if not token:
                   raise ReviewError('Missing organization secret OCR_CI_TOKEN or repository access to it.', 'configuration_error')
               with open(os.environ['GITHUB_EVENT_PATH']) as source:
-                  identity = coordinates(json.load(source), os.environ)
+                  event = json.load(source)
+              identity = coordinates(event, os.environ)
               receipt = {'schema': SCHEMA, 'request_id': request_id(identity), **identity}
               if _telemetry:
                   _telemetry.context.update({**identity, 'request_id': receipt['request_id']})
                   _telemetry.emit('ocr_client_started')
-              payload = {**receipt, 'source': {'run_id': os.environ.get('GITHUB_RUN_ID'),
-                                             'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
-                                             'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF')}}
+              payload = {
+                  **receipt,
+                  'github_event': event,
+                  'source': {
+                      'run_id': os.environ.get('GITHUB_RUN_ID'),
+                      'run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
+                      'workflow_ref': os.environ.get('GITHUB_WORKFLOW_REF'),
+                  },
+              }
               run_id, run_attempt = os.environ.get('GITHUB_RUN_ID', ''), os.environ.get('GITHUB_RUN_ATTEMPT', '')
               if run_id.isdecimal() and run_attempt.isdecimal() and int(run_attempt) > 1:
                   payload['retry_key'] = run_id + ':' + run_attempt

@@ -191,7 +191,9 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(self.records(output)[0]['error'], 'ReviewError')
 
     def test_main_exits_after_durable_ack_without_a_status_query(self):
-        event = {'pull_request': {'number': IDENTITY['pull_number'], 'state': 'open',
+        event = {'action': 'synchronize', 'sender': {'login': 'event-sender'},
+                 'pull_request': {'number': IDENTITY['pull_number'], 'state': 'open',
+                 'user': {'login': 'pr-author', 'id': 42}, 'body': 'original-event-body-marker',
                  'head': {'sha': IDENTITY['head_sha']}, 'base': {'sha': IDENTITY['base_sha'],
                  'ref': IDENTITY['base_ref'], 'repo': {'full_name': IDENTITY['repository']}}}}
         with tempfile.TemporaryDirectory() as directory, self.gateway(['disconnect', 'ok']) as requests:
@@ -200,12 +202,15 @@ class TransportTests(unittest.TestCase):
             env = {'GITHUB_EVENT_NAME': 'pull_request_target', 'GITHUB_REPOSITORY': IDENTITY['repository'],
                    'GITHUB_EVENT_PATH': str(event_file), 'OCR_CI_TOKEN': 'secret-not-for-logs',
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2'}
-            with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()), patch.object(client.time, 'sleep'):
+            with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()) as output, patch.object(client.time, 'sleep'):
                 self.assertEqual(client.main(), 0)
             self.assertEqual([r['path'] for r in requests], ['/ocr-ci-submit', '/ocr-ci-submit'])
             payloads = [json.loads(r['body']) for r in requests]
             self.assertEqual(payloads[0], payloads[1])
+            self.assertEqual(payloads[0]['github_event'], event)
+            self.assertEqual(payloads[0]['request_id'], RECEIPT['request_id'])
             self.assertEqual(payloads[0]['retry_key'], '123:2')
+            self.assertNotIn('original-event-body-marker', output.getvalue())
 
 
 if __name__ == '__main__':
